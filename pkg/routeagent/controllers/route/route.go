@@ -14,6 +14,7 @@ import (
 	v1 "github.com/submariner-io/submariner/pkg/apis/submariner.io/v1"
 	clientset "github.com/submariner-io/submariner/pkg/client/clientset/versioned"
 	informers "github.com/submariner-io/submariner/pkg/client/informers/externalversions/submariner.io/v1"
+	"github.com/submariner-io/submariner/pkg/log"
 	"github.com/submariner-io/submariner/pkg/util"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -146,7 +147,7 @@ func (r *Controller) Run(stopCh <-chan struct{}) error {
 	klog.Infof("Starting Route Controller. ClusterID: %s, localClusterCIDR: %v, localServiceCIDR: %v", r.clusterID, r.localClusterCidr, r.localServiceCidr)
 
 	// Wait for the caches to be synced before starting workers
-	klog.Info("Waiting for endpoint informer caches to sync.")
+	klog.V(log.DEBUG_LEVEL).Info("Waiting for endpoint informer caches to sync.")
 	if ok := cache.WaitForCacheSync(stopCh, r.endpointsSynced, r.smRouteAgentPodsSynced); !ok {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
@@ -186,11 +187,11 @@ func (r *Controller) Run(stopCh <-chan struct{}) error {
 	}
 
 	for index, pod := range podList.Items {
-		klog.V(4).Infof("In %s, podIP of submariner-route-agent[%d] is %s", r.clusterID, index, pod.Status.PodIP)
+		klog.V(log.DEBUG_LEVEL).Infof("In %s, podIP of submariner-route-agent[%d] is %s", r.clusterID, index, pod.Status.PodIP)
 		r.populateRemoteVtepIps(pod.Status.PodIP)
 	}
 
-	klog.Info("Starting workers")
+	klog.V(log.DEBUG_LEVEL).Info("Starting workers")
 	go wait.Until(r.runEndpointWorker, time.Second, stopCh)
 	go wait.Until(r.runPodWorker, time.Second, stopCh)
 	wg.Wait()
@@ -301,7 +302,7 @@ func (r *Controller) createVxLANInterface(ifaceType int, gatewayNodeIP net.IP) e
 		if err != nil {
 			return fmt.Errorf("unable to update vxlan rp_filter proc entry, err: %s", err)
 		} else {
-			klog.Info("Successfully configured rp_filter to loose mode(2) ")
+			klog.V(log.DEBUG_LEVEL).Infof("Successfully configured rp_filter to loose mode(2) on %s", VxLANIface)
 		}
 
 	} else if ifaceType == VxInterfaceWorker {
@@ -356,7 +357,7 @@ func (r *Controller) processNextPod() bool {
 			return fmt.Errorf("error retrieving submariner-route-agent pod object %s: %v", name, err)
 		}
 
-		klog.V(4).Infof("In processNextPod, POD HostIP is %s", pod.Status.HostIP)
+		klog.V(log.DEBUG_LEVEL).Infof("In processNextPod, POD HostIP is %s", pod.Status.HostIP)
 		r.populateRemoteVtepIps(pod.Status.PodIP)
 
 		r.gwVxLanMutex.Lock()
@@ -379,7 +380,7 @@ func (r *Controller) processNextPod() bool {
 		}
 
 		r.podWorkqueue.Forget(obj)
-		klog.V(4).Infof("Pod event processed by route controller")
+		klog.V(log.DEBUG_LEVEL).Infof("Pod event processed by route controller")
 		return nil
 	}()
 
@@ -398,8 +399,8 @@ func (r *Controller) processNextEndpoint() bool {
 	}
 	err := func() error {
 		defer r.endpointWorkqueue.Done(obj)
-		klog.V(4).Infof("Handling object in handleEndpoint")
-		klog.V(4).Infof("Processing endpoint object: %v", obj)
+		// TODO: %v is very difficult to read in logs for an endpoint, we need a nicer print
+		klog.V(log.DEBUG_LEVEL).Infof("Processing endpoint %v", obj)
 		key := obj.(string)
 		ns, name, err := cache.SplitMetaNamespaceKey(key)
 		if err != nil {
@@ -419,31 +420,36 @@ func (r *Controller) processNextEndpoint() bool {
 		}
 
 		if endpoint.Spec.ClusterID != r.clusterID {
-			klog.V(6).Infof("setting routes of endpoint object %s", name)
+			klog.V(log.DEBUG_LEVEL).Infof("setting routes for endpoint  %s", name)
 			r.updateIptableRulesForInterclusterTraffic(endpoint.Spec.Subnets)
 			r.endpointWorkqueue.Forget(obj)
 			return nil
 		}
+
+		klog.V(log.DEBUG_LEVEL).Infof("Local Cluster Gateway Node IP is %s", endpoint.Spec.PrivateIP)
 
 		hostname, err := os.Hostname()
 		if err != nil {
 			klog.Fatalf("unable to determine hostname: %v", err)
 		}
 
-		klog.V(6).Infof("Local Cluster Gateway Node IP is %s", endpoint.Spec.PrivateIP)
-
 		// If the endpoint hostname matches with our hostname, it implies we are on gateway node
 		if endpoint.Spec.Hostname == hostname {
-			r.cleanRoutes()
+			klog.Infof("This has become an active gateway node (IP %s)", endpoint.Spec.PrivateIP)
+
 			r.gwVxLanMutex.Lock()
 			defer r.gwVxLanMutex.Unlock()
 
 			r.isGatewayNode = true
+			klog.Infof("Creating vxlan interface: %s", VxLANIface)
 			err = r.createVxLANInterface(VxInterfaceGateway, nil)
 			if err != nil {
 				klog.Fatalf("Unable to create VxLAN interface on GatewayNode (%s): %v", hostname, err)
 			}
-			klog.V(6).Infof("not reconciling routes because we appear to be the gateway host")
+
+			r.cleanRoutes()
+
+			klog.V(log.DEBUG_LEVEL).Infof("not reconciling gateway routes because we appear to be the gateway host")
 			r.endpointWorkqueue.Forget(obj)
 			return nil
 		}
@@ -463,7 +469,9 @@ func (r *Controller) processNextEndpoint() bool {
 		}
 		r.gwVxLanMutex.Unlock()
 
+		// NOTE(mangelajo): This may not belong here, it's a gateway cleanup thing
 		r.cleanXfrmPolicies()
+
 		err = r.reconcileRoutes(remoteVtepIP)
 		if err != nil {
 			r.endpointWorkqueue.AddRateLimited(obj)
@@ -471,7 +479,7 @@ func (r *Controller) processNextEndpoint() bool {
 		}
 
 		r.endpointWorkqueue.Forget(obj)
-		klog.V(4).Infof("endpoint processed by route controller")
+		klog.V(log.DEBUG_LEVEL).Infof("endpoint processed by route controller")
 		return nil
 	}()
 
@@ -490,7 +498,7 @@ func (r *Controller) enqueueEndpoint(obj interface{}) {
 		utilruntime.HandleError(err)
 		return
 	}
-	klog.V(4).Infof("Enqueueing endpoint for route controller %v", obj)
+	klog.V(log.DEBUG_LEVEL).Infof("Enqueueing endpoint for route controller %v", obj)
 	r.endpointWorkqueue.AddRateLimited(key)
 }
 
@@ -505,7 +513,7 @@ func (r *Controller) enqueuePod(obj interface{}) {
 	pod := obj.(*k8sv1.Pod)
 	// Add the POD event to the workqueue only if the sm-route-agent podIP does not exist in the local cache.
 	if pod.Status.HostIP != "" && !r.remoteVTEPs.Contains(pod.Status.HostIP) {
-		klog.V(4).Infof("Enqueueing sm-route-agent-pod event, ip: %s", pod.Status.HostIP)
+		klog.V(log.DEBUG_LEVEL).Infof("Enqueueing sm-route-agent-pod event, ip: %s", pod.Status.HostIP)
 		r.podWorkqueue.AddRateLimited(key)
 	}
 }
@@ -514,7 +522,7 @@ func (r *Controller) handleRemovedEndpoint(obj interface{}) {
 	// ideally we should attempt to remove all routes if the endpoint matches our cluster ID
 	var object *v1.Endpoint
 	var ok bool
-	klog.V(4).Infof("Handling object in handleEndpoint")
+	klog.V(log.DEBUG_LEVEL).Infof("Handling object in handleRemoveEndpoint")
 	if object, ok = obj.(*v1.Endpoint); !ok {
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 		if !ok {
@@ -526,9 +534,8 @@ func (r *Controller) handleRemovedEndpoint(obj interface{}) {
 			klog.Errorf("Could not convert object tombstone %v to an Endpoint", tombstone.Obj)
 			return
 		}
-		klog.V(4).Infof("Recovered deleted object '%s' from tombstone", object.GetName())
 	}
-	klog.V(4).Infof("Informed of removed endpoint for route controller object: %v", object)
+	klog.V(log.DEBUG_LEVEL).Infof("Informed of removed endpoint for route controller object: %v", object)
 	hostname, err := os.Hostname()
 	if err != nil {
 		klog.Fatalf("Could not retrieve hostname: %v", err)
@@ -541,20 +548,31 @@ func (r *Controller) handleRemovedEndpoint(obj interface{}) {
 		r.gwVxLanMutex.Lock()
 		defer r.gwVxLanMutex.Unlock()
 
-		klog.V(6).Infof("Endpoint matches the cluster ID of this cluster")
-		err := r.vxlanDevice.deleteVxLanIface()
-		if err != nil {
-			klog.Errorf("Failed to delete the the vxlan interface on endpoint removal: %v", err)
-			return
+		if object.Spec.Hostname == hostname {
+			klog.Infof("Local Gateway Endpoint (IP %s) removed: deleting vxlan interface",
+				object.Spec.PrivateIP)
+		} else {
+			klog.Infof("Gateway Endpoint (IP %s) for our cluster removed: deleting vxlan interface",
+				object.Spec.PrivateIP)
 		}
-		r.vxlanDevice = nil
+
+		if r.vxlanDevice == nil {
+			klog.Errorf("r.vxlanDevice == nil , this should never happen, endpoint creation event missed?.")
+		} else {
+			err := r.vxlanDevice.deleteVxLanIface()
+			if err != nil {
+				klog.Errorf("Failed to delete the the vxlan interface on endpoint removal: %s", err.Error())
+				return
+			}
+			r.vxlanDevice = nil
+		}
 	}
 
-	klog.V(4).Infof("Removed routes from host")
+	klog.V(log.DEBUG_LEVEL).Infof("Removed routes from host")
 }
 
 func (r *Controller) handleRemovedPod(obj interface{}) {
-	klog.V(6).Infof("Removing podIP in route controller %v", obj)
+	klog.V(log.DEBUG_LEVEL).Infof("Removing podIP in route controller %v", obj)
 	pod := obj.(*k8sv1.Pod)
 
 	if r.remoteVTEPs.Contains(pod.Status.HostIP) {
@@ -574,21 +592,21 @@ func (r *Controller) handleRemovedPod(obj interface{}) {
 func (r *Controller) cleanRoutes() {
 	link, err := netlink.LinkByName(VxLANIface)
 	if err != nil {
-		klog.Errorf("Error retrieving link by name %s: %v", VxLANIface, err)
+		klog.Errorf("Unable to cleanup routes, error retrieving link by name %s: %v", VxLANIface, err)
 		return
 	}
 	currentRouteList, err := netlink.RouteList(link, syscall.AF_INET)
 	if err != nil {
-		klog.Errorf("Error retrieving routes on the link %s: %v", VxLANIface, err)
+		klog.Errorf("Unable to cleanup routes, error retrieving routes on the link %s: %v", VxLANIface, err)
 		return
 	}
 	for _, route := range currentRouteList {
-		klog.V(6).Infof("Processing route %v", route)
+		klog.V(log.DEBUG_LEVEL).Infof("Processing route %v", route)
 		if route.Dst == nil || route.Gw == nil {
-			klog.V(6).Infof("Found nil gw or dst")
+			klog.V(log.DEBUG_LEVEL).Infof("Found nil gw or dst")
 		} else {
 			if r.remoteSubnets.Contains(route.Dst.String()) {
-				klog.V(6).Infof("Removing route %s", route.String())
+				klog.V(log.DEBUG_LEVEL).Infof("Removing route %s", route.String())
 				if err = netlink.RouteDel(&route); err != nil {
 					klog.Errorf("Error removing route %s: %v", route.String(), err)
 				}
@@ -606,8 +624,11 @@ func (r *Controller) cleanXfrmPolicies() {
 		return
 	}
 
+	if len(currentXfrmPolicyList) > 0 {
+		klog.Infof("Cleaning up %d XFRM policies", len(currentXfrmPolicyList))
+	}
 	for _, xfrmPolicy := range currentXfrmPolicyList {
-		klog.V(6).Infof("Deleting XFRM policy %s", xfrmPolicy.String())
+		klog.V(log.DEBUG_LEVEL).Infof("Deleting XFRM policy %s", xfrmPolicy.String())
 		if err = netlink.XfrmPolicyDel(&xfrmPolicy); err != nil {
 			klog.Errorf("Error Deleting XFRM policy %s: %v", xfrmPolicy.String(), err)
 		}
@@ -616,6 +637,9 @@ func (r *Controller) cleanXfrmPolicies() {
 
 // Reconcile the routes installed on this device using rtnetlink
 func (r *Controller) reconcileRoutes(vxlanGw net.IP) error {
+
+	klog.V(log.DEBUG_LEVEL).Infof("Reconciling routes to gw: %s", vxlanGw.String())
+
 	link, err := netlink.LinkByName(VxLANIface)
 	if err != nil {
 		return fmt.Errorf("error retrieving link by name %s: %v", VxLANIface, err)
@@ -630,14 +654,14 @@ func (r *Controller) reconcileRoutes(vxlanGw net.IP) error {
 	// First lets delete all of the routes that don't match
 	for _, route := range currentRouteList {
 		// contains(endpoint destinations, route destination string, and the route gateway is our actual destination
-		klog.V(6).Infof("Processing route %v", route)
+		klog.V(log.DEBUG_LEVEL).Infof("Processing route %v", route)
 		if route.Dst == nil || route.Gw == nil {
-			klog.V(6).Infof("Found nil gw or dst")
+			klog.V(log.DEBUG_LEVEL).Infof("Found nil gw or dst")
 		} else {
 			if r.remoteSubnets.Contains(route.Dst.String()) && route.Gw.Equal(vxlanGw) {
-				klog.V(6).Infof("Found route %s with gw %s already installed", route.String(), route.Gw.String())
+				klog.V(log.DEBUG_LEVEL).Infof("Found route %s with gw %s already installed", route.String(), route.Gw.String())
 			} else {
-				klog.V(6).Infof("Removing route %s", route.String())
+				klog.V(log.DEBUG_LEVEL).Infof("Removing route %s", route.String())
 				if err = netlink.RouteDel(&route); err != nil {
 					klog.Errorf("Error removing route %s: %v", route.String(), err)
 				}
@@ -671,7 +695,7 @@ func (r *Controller) reconcileRoutes(vxlanGw net.IP) error {
 
 			} else {
 				if curRoute.Gw.Equal(route.Gw) && curRoute.Dst.String() == route.Dst.String() {
-					klog.V(6).Infof("Found equivalent route, not adding")
+					klog.V(log.DEBUG_LEVEL).Infof("Found equivalent route, not adding")
 					found = true
 				}
 			}
