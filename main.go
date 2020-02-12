@@ -206,9 +206,9 @@ func startLeaderElection(leaderElectionClient kubernetes.Interface, recorder rec
 
 	leaderelection.RunOrDie(context.TODO(), leaderelection.LeaderElectionConfig{
 		Lock:          &rl,
-		LeaseDuration: 15 * time.Second,
-		RenewDeadline: 10 * time.Second,
-		RetryPeriod:   3 * time.Second,
+		LeaseDuration: 5 * time.Second,
+		RenewDeadline: 3 * time.Second,
+		RetryPeriod:   2 * time.Second,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: run,
 			OnStoppedLeading: func() {
