@@ -19,7 +19,7 @@ const (
 	// DefaultDeviceName specifies name of wireguard network device
 	DefaultDeviceName = "subwg0"
 
-	// name (key) of publicKey entry in back-end map
+	// PublicKey is name (key) of publicKey entry in back-end map
 	PublicKey = "publicKey"
 
 	// we assume Linux
@@ -42,11 +42,18 @@ func NewDriver(localSubnets []string, localEndpoint types.SubmarinerEndpoint) (*
 	var err error
 
 	wg := wireguard{
-		peers: make(map[string]wgtypes.Key),
+		peers:         make(map[string]wgtypes.Key),
 		localEndpoint: localEndpoint,
 	}
 
-	// create the wg device (ip link add dev $DefaultDeviceName type wireguard)
+	// create the wg device if needed (ip link add dev $DefaultDeviceName type wireguard)
+	if wg.link, err = netlink.LinkByName(DefaultDeviceName); err == nil {
+		// delete existing device
+		if err = netlink.LinkDel(wg.link); err != nil {
+			return nil, fmt.Errorf("failed to delete existing wireguard device: %v", err)
+		}
+	}
+
 	la := netlink.NewLinkAttrs()
 	la.Name = DefaultDeviceName
 	wg.link = &netlink.GenericLink{
@@ -65,8 +72,11 @@ func NewDriver(localSubnets []string, localEndpoint types.SubmarinerEndpoint) (*
 		ip = localEndpoint.Spec.PrivateIP
 	}
 	var localIP *netlink.Addr
-	if localIP, err = netlink.ParseAddr(ip); err != nil {
-		return nil, fmt.Errorf("failed to parse my IP address %s: %v", ip, err)
+	if localIP, err = netlink.ParseAddr(ip + "/32"); err != nil {
+		// try again as CIDR
+		if localIP, err = netlink.ParseAddr(ip); err != nil {
+			return nil, fmt.Errorf("failed to parse my IP address %s: %v", ip, err)
+		}
 	}
 	if err = netlink.AddrAdd(wg.link, localIP); err != nil {
 		return nil, fmt.Errorf("failed to add local address: %v", err)
@@ -96,7 +106,6 @@ func NewDriver(localSubnets []string, localEndpoint types.SubmarinerEndpoint) (*
 			}
 			wg.client = nil
 		}
-		return
 	}()
 
 	// generate local keys and set public key in BackendConfig
@@ -167,21 +176,21 @@ func (w *wireguard) ConnectToEndpoint(remoteEndpoint types.SubmarinerEndpoint) (
 			//TODO check that peer config has not changed (eg allowedIPs)
 			klog.Infof("skipping update of existing peer key %s: %v", oldKey.String(), err)
 			return ip, nil
-		} else { // remove old
-			peerCfg := []wgtypes.PeerConfig{
-				{
-					PublicKey: remoteKey,
-					Remove:    true,
-				},
-			}
-			if err = w.client.ConfigureDevice(DefaultDeviceName, wgtypes.Config{
-					ReplacePeers: true,
-					Peers:        peerCfg,
-				}); err != nil {
-				klog.Errorf("failed to remove old key %s: %v", oldKey.String(), err)
-			}
-			delete(w.peers, remoteEndpoint.Spec.ClusterID)
 		}
+		// remove old
+		peerCfg := []wgtypes.PeerConfig{
+			{
+				PublicKey: remoteKey,
+				Remove:    true,
+			},
+		}
+		if err = w.client.ConfigureDevice(DefaultDeviceName, wgtypes.Config{
+			ReplacePeers: true,
+			Peers:        peerCfg,
+		}); err != nil {
+			klog.Errorf("failed to remove old key %s: %v", oldKey.String(), err)
+		}
+		delete(w.peers, remoteEndpoint.Spec.ClusterID)
 	}
 	w.peers[remoteEndpoint.Spec.ClusterID] = remoteKey
 
@@ -230,7 +239,7 @@ func (w *wireguard) ConnectToEndpoint(remoteEndpoint types.SubmarinerEndpoint) (
 		if err = netlink.RouteAdd(&route); err != nil {
 			return "", fmt.Errorf("failed to add route %s: %v", route.String(), err)
 		}
-	} 
+	}
 
 	return ip, nil
 }
@@ -290,5 +299,5 @@ func (w *wireguard) DisconnectFromEndpoint(remoteEndpoint types.SubmarinerEndpoi
 
 func (w *wireguard) GetActiveConnections(clusterID string) ([]string, error) {
 	// force caller to skip duplicate handling
-	return make([]string,0), nil
+	return make([]string, 0), nil
 }
