@@ -84,12 +84,12 @@ func NewDriver(localSubnets []string, localEndpoint types.SubmarinerEndpoint) (*
 
 	// check localSubnets
 	var cidr *net.IPNet
-	wg.localSubnets = make([]*net.IPNet, len(localSubnets))
-	for i, sn := range localSubnets {
+	wg.localSubnets = make([]*net.IPNet, 0, len(localSubnets))
+	for _, sn := range localSubnets {
 		if _, cidr, err = net.ParseCIDR(sn); err != nil {
 			return nil, fmt.Errorf("failed to parse subnet %s: %v", sn, err)
 		}
-		wg.localSubnets[i] = cidr
+		wg.localSubnets = append(wg.localSubnets, cidr)
 	}
 
 	// create controller
@@ -195,7 +195,7 @@ func (w *wireguard) ConnectToEndpoint(remoteEndpoint types.SubmarinerEndpoint) (
 	w.peers[remoteEndpoint.Spec.ClusterID] = remoteKey
 
 	// Set peer subnets
-	allowedIPs := make([]net.IPNet, len(remoteEndpoint.Spec.Subnets))
+	allowedIPs := make([]net.IPNet, 0, len(remoteEndpoint.Spec.Subnets))
 	var cidr *net.IPNet
 	for _, sn := range remoteEndpoint.Spec.Subnets {
 		if _, cidr, err = net.ParseCIDR(sn); err != nil {
