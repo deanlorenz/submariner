@@ -27,11 +27,13 @@ const (
 
 	// we assume Linux
 	//deviceType = wgtypes.LinuxKernel
+
+	cableDriverName = "wireguard"
 )
 
 func init() {
-	cable.AddDriver("wg", NewWGDriver)
-	cable.AddDriver("wireguard", NewWGDriver)
+	// cable.SetDefautCableDriver(cableDriverName)
+	cable.AddDriver(cableDriverName, NewWGDriver)
 }
 
 type wireguard struct {

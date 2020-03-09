@@ -36,12 +36,13 @@ const (
 
 	// charonViciSocket points to the vici socket exposed by charon
 	charonViciSocket = "/var/run/charon.vici"
+
+	cableDriverName = "strongswan"
 )
 
 func init() {
-	cable.AddDriver("", NewStrongSwan) //default
-	cable.AddDriver("ipsec", NewStrongSwan)
-	cable.AddDriver("ipsec/strongswan", NewStrongSwan)
+	cable.SetDefautCableDriver(cableDriverName)
+	cable.AddDriver(cableDriverName, NewStrongSwan)
 }
 
 type strongSwan struct {
