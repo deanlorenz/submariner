@@ -2,11 +2,11 @@ package wireguard
 
 import (
 	"fmt"
-	"github.com/submariner-io/submariner/pkg/log"
 	"net"
 	"os"
 
 	"github.com/submariner-io/submariner/pkg/cable"
+	"github.com/submariner-io/submariner/pkg/log"
 	"github.com/vishvananda/netlink"
 	"k8s.io/klog"
 
