@@ -181,12 +181,12 @@ func (w *wireguard) ConnectToEndpoint(remoteEndpoint types.SubmarinerEndpoint) (
 	if remoteKey, err = wgtypes.ParseKey(key); err != nil {
 		return "", fmt.Errorf("failed to parse public key %s: %v", key, err)
 	}
-	klog.V(log.TRACE).Infof("Connecting endpoint %s with publicKey %s", remoteIP.String(), pub.String())
+	klog.V(log.TRACE).Infof("Connecting endpoint %s with publicKey %s", remoteIP.String(), remoteKey.String())
 	var oldKey wgtypes.Key
 	if oldKey, found = w.peers[remoteEndpoint.Spec.ClusterID]; found {
 		if oldKey.String() == remoteKey.String() {
 			//TODO check that peer config has not changed (eg allowedIPs)
-			klog.Infof("skipping update of existing peer key %s: %v", oldKey.String(), err)
+			klog.V(log.TRACE).Infof("skipping update of existing peer key %s", oldKey.String())
 			return ip, nil
 		}
 		// remove old
