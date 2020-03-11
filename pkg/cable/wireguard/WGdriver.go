@@ -2,11 +2,12 @@ package wireguard
 
 import (
 	"fmt"
-	"github.com/submariner-io/submariner/pkg/log"
 	"net"
 	"os"
+	"sync"
 
 	"github.com/submariner-io/submariner/pkg/cable"
+	"github.com/submariner-io/submariner/pkg/log"
 	"github.com/vishvananda/netlink"
 	"k8s.io/klog"
 
@@ -32,7 +33,8 @@ const (
 )
 
 func init() {
-	// cable.SetDefautCableDriver(cableDriverName)
+	// uncomment next line to set as default
+	//cable.SetDefautCableDriver(cableDriverName)
 	cable.AddDriver(cableDriverName, NewWGDriver)
 }
 
@@ -40,6 +42,7 @@ type wireguard struct {
 	localSubnets  []*net.IPNet
 	localEndpoint types.SubmarinerEndpoint
 	peers         map[string]wgtypes.Key // clusterID -> publicKey
+	mutex         sync.Mutex
 	client        *wgctrl.Client
 	link          netlink.Link
 	//debug   bool
@@ -112,7 +115,7 @@ func NewWGDriver(localSubnets []string, localEndpoint types.SubmarinerEndpoint) 
 	defer func() {
 		if err != nil {
 			if e := wg.client.Close(); e != nil {
-				klog.Errorf("failed to close client %v", e)
+				klog.Errorf("Failed to close client %v", e)
 			}
 			wg.client = nil
 		}
@@ -181,15 +184,18 @@ func (w *wireguard) ConnectToEndpoint(remoteEndpoint types.SubmarinerEndpoint) (
 	if remoteKey, err = wgtypes.ParseKey(key); err != nil {
 		return "", fmt.Errorf("failed to parse public key %s: %v", key, err)
 	}
-	klog.V(log.TRACE).Infof("Connecting endpoint %s with publicKey %s", remoteIP.String(), remoteKey.String())
+	klog.V(log.TRACE).Infof("Connecting cluster %s endpoint %s with publicKey %s", remoteEndpoint.Spec.ClusterID, remoteIP.String(), remoteKey.String())
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
 	var oldKey wgtypes.Key
 	if oldKey, found = w.peers[remoteEndpoint.Spec.ClusterID]; found {
 		if oldKey.String() == remoteKey.String() {
 			//TODO check that peer config has not changed (eg allowedIPs)
-			klog.V(log.TRACE).Infof("skipping update of existing peer key %s", oldKey.String())
+			klog.V(log.TRACE).Infof("Skipping update of existing peer key %s", oldKey.String())
 			return ip, nil
 		}
 		// remove old
+		klog.V(log.TRACE).Infof("Removing old key %s", oldKey.String())
 		peerCfg := []wgtypes.PeerConfig{
 			{
 				PublicKey: remoteKey,
@@ -200,11 +206,11 @@ func (w *wireguard) ConnectToEndpoint(remoteEndpoint types.SubmarinerEndpoint) (
 			ReplacePeers: true,
 			Peers:        peerCfg,
 		}); err != nil {
-			klog.Errorf("failed to remove old key %s: %v", oldKey.String(), err)
+			klog.Errorf("Failed to remove old key %s: %v", oldKey.String(), err)
 		}
 		delete(w.peers, remoteEndpoint.Spec.ClusterID)
+		klog.V(log.TRACE).Infof("Successfully removed old key %s", oldKey.String())
 	}
-	w.peers[remoteEndpoint.Spec.ClusterID] = remoteKey
 
 	// Set peer subnets
 	allowedIPs := make([]net.IPNet, len(remoteEndpoint.Spec.Subnets))
@@ -236,12 +242,30 @@ func (w *wireguard) ConnectToEndpoint(remoteEndpoint types.SubmarinerEndpoint) (
 	}); err != nil {
 		return "", fmt.Errorf("failed to configure peer: %v", err)
 	}
+	// verify peer was added
+	var d *wgtypes.Device
+	if d, err = w.client.Device(DefaultDeviceName); err != nil {
+		klog.Errorf("Failed to find wireguard device by name: %v", err)
+	} else {
+		found = false
+		for _, p := range d.Peers {
+			if p.PublicKey.String() == remoteKey.String() {
+				found = true
+				klog.V(log.TRACE).Infof("Peer configured: %+v", p)
+				break
+			}
+		}
+		if !found {
+			klog.Errorf("Failed to verify peer configuration")
+		}
+	}
+	w.peers[remoteEndpoint.Spec.ClusterID] = remoteKey
 
 	// Add routes to peer
 	//TODO save old routes for removal
 	var wg netlink.Link
 	if wg, err = netlink.LinkByName(DefaultDeviceName); err != nil {
-		return "", fmt.Errorf("failed to find wireguard device by name: %v", err)
+		return "", fmt.Errorf("failed to find wireguard link by name: %v", err)
 	}
 	for _, peerNet := range allowedIPs {
 		route := netlink.Route{
@@ -253,7 +277,7 @@ func (w *wireguard) ConnectToEndpoint(remoteEndpoint types.SubmarinerEndpoint) (
 		}
 	}
 
-	klog.V(log.TRACE).Infof("Connected endpoint peer %+v", peerCfg)
+	klog.V(log.TRACE).Infof("Successfully connected endpoint peer %+v", peerCfg)
 
 	return ip, nil
 }
@@ -269,8 +293,10 @@ func (w *wireguard) DisconnectFromEndpoint(remoteEndpoint types.SubmarinerEndpoi
 	if key, found = remoteEndpoint.Spec.BackendConfig[PublicKey]; !found {
 		return fmt.Errorf("missing peer public key")
 	}
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
 	if remoteKey, err = wgtypes.ParseKey(key); err != nil {
-		klog.Warningf("failed to parse public key %s: %v, search by clusterID", key, err)
+		klog.Warningf("Failed to parse public key %s: %v, search by clusterID", key, err)
 		if remoteKey, found = w.peers[remoteEndpoint.Spec.ClusterID]; !found {
 			return fmt.Errorf("missing peer public key")
 		}
