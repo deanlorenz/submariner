@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	// DefaultListenPort specifies UDP port address of wireguard
+	// DefaultListenPort specifies UDP port address of WireGuard
 	DefaultListenPort = 5871
 
-	// DefaultDeviceName specifies name of wireguard network device
+	// DefaultDeviceName specifies name of WireGuard network device
 	DefaultDeviceName = "subwg0"
 
 	// PublicKey is name (key) of publicKey entry in back-end map
@@ -34,7 +34,7 @@ const (
 
 func init() {
 	// uncomment next line to set as default
-	//cable.SetDefautCableDriver(cableDriverName)
+	cable.SetDefautCableDriver(cableDriverName)
 	cable.AddDriver(cableDriverName, NewWGDriver)
 }
 
@@ -49,7 +49,7 @@ type wireguard struct {
 	//logFile string
 }
 
-// NewWGDriver creates a new Wireguard driver
+// NewWGDriver creates a new WireGuard driver
 func NewWGDriver(localSubnets []string, localEndpoint types.SubmarinerEndpoint) (cable.Driver, error) {
 
 	var err error
@@ -59,8 +59,8 @@ func NewWGDriver(localSubnets []string, localEndpoint types.SubmarinerEndpoint) 
 		localEndpoint: localEndpoint,
 	}
 
-	if err = setWGLink(wg, localSubnets); err != nil {
-		return nil, fmt.Errorf("failed to setup wireguard link: %v", err)
+	if err = setWGLink(&wg, localSubnets); err != nil {
+		return nil, fmt.Errorf("failed to setup WireGuard link: %v", err)
 	}
 
 	// create controller
@@ -101,17 +101,17 @@ func NewWGDriver(localSubnets []string, localEndpoint types.SubmarinerEndpoint) 
 		Peers:        peerConfigs,
 	}
 	if err = wg.client.ConfigureDevice(DefaultDeviceName, cfg); err != nil {
-		return nil, fmt.Errorf("failed to configure wireguard device: %v", err)
+		return nil, fmt.Errorf("failed to configure WireGuard device: %v", err)
 	}
 
-	klog.V(log.DEBUG).Infof("Initialized wireguard %s with publicKey %s", DefaultDeviceName, pub)
+	klog.V(log.DEBUG).Infof("Initialized WireGuard %s with publicKey %s", DefaultDeviceName, pub)
 	return &wg, nil
 }
 
 func (w *wireguard) Init() error {
 	// ip link set $DefaultDeviceName up
 	if err := netlink.LinkSetUp(w.link); err != nil {
-		return fmt.Errorf("failed to bring up wireguard device: %v", err)
+		return fmt.Errorf("failed to bring up WireGuard device: %v", err)
 	}
 	return nil
 }
@@ -124,7 +124,7 @@ func (w *wireguard) ConnectToEndpoint(remoteEndpoint types.SubmarinerEndpoint) (
 	}
 
 	// parse remote addresses and allowed IPs
-	ip := endpointIP(remoteEndpoint)
+	ip := endpointIP(&remoteEndpoint)
 	remoteIP := net.ParseIP(ip)
 	if remoteIP == nil {
 		return "", fmt.Errorf("failed to parse remote IP %s", ip)
@@ -280,13 +280,13 @@ func (w *wireguard) GetActiveConnections(clusterID string) ([]string, error) {
 }
 
 // Create new wg link and assign addr from local subnets
-func setWGLink(wg wireguard, localSubnets []string) error {
+func setWGLink(w *wireguard, localSubnets []string) error {
 
 	// delete existing wg device if needed
 	if link, err := netlink.LinkByName(DefaultDeviceName); err == nil {
 		// delete existing device
 		if err := netlink.LinkDel(link); err != nil {
-			return fmt.Errorf("failed to delete existing wireguard device: %v", err)
+			return fmt.Errorf("failed to delete existing WireGuard device: %v", err)
 		}
 	}
 
@@ -298,17 +298,17 @@ func setWGLink(wg wireguard, localSubnets []string) error {
 		LinkType:  "wireguard",
 	}
 	if err := netlink.LinkAdd(link); err == nil {
-		wg.link = link
+		w.link = link
 	} else {
-		return fmt.Errorf("failed to add wireguard device: %v", err)
+		return fmt.Errorf("failed to add WireGuard device: %v", err)
 	}
 
 	// parse localSubnets and get internal address
-	wg.localSubnets = parseSubnets(localSubnets)
-	ip, err := discoverInternalIP(wg.localSubnets)
+	w.localSubnets = parseSubnets(localSubnets)
+	ip, err := discoverInternalIP(w.localSubnets)
 	if err != nil {
 		klog.V(log.DEBUG).Infof("Using endpoint IP as internal address; %v", err)
-		ip = endpointIP(wg.localEndpoint)
+		ip = endpointIP(&w.localEndpoint)
 	}
 	klog.V(log.DEBUG).Infof("Setting interface address to  %s", ip)
 
@@ -320,7 +320,7 @@ func setWGLink(wg wireguard, localSubnets []string) error {
 			return fmt.Errorf("failed to parse IP address %s: %v", ip, err)
 		}
 	}
-	if err = netlink.AddrAdd(wg.link, localIP); err != nil {
+	if err = netlink.AddrAdd(w.link, localIP); err != nil {
 		return fmt.Errorf("failed to add local address: %v", err)
 	}
 
@@ -342,8 +342,8 @@ func discoverInternalIP(cidrs []net.IPNet) (string, error) {
 			klog.V(log.DEBUG).Infof("Skipping local address %v, unable to ParseCIDR: %v", a, err)
 			continue
 		}
-		if ip.To4() != nil {
-			klog.V(log.DEBUG).Infof("Skipping local address %s: not IP4", ip)
+		if ip.To4() == nil {
+			klog.V(log.DEBUG).Infof("Skipping local address %+v: not IP4", ip)
 			continue
 		}
 		for _, c := range cidrs {
@@ -403,7 +403,7 @@ func peerByKey(c *wgctrl.Client, key *wgtypes.Key) (*wgtypes.Peer, error) {
 	return nil, fmt.Errorf("peer not found for key %s", key)
 }
 
-func endpointIP(ep types.SubmarinerEndpoint) string {
+func endpointIP(ep *types.SubmarinerEndpoint) string {
 	if ep.Spec.NATEnabled {
 		return ep.Spec.PublicIP
 	}
