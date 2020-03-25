@@ -46,12 +46,12 @@ function setup_broker() {
 
 function subctl_install_subm() {
     context=$1
-    if [[ $2 = default ]]; then
-      cbldrv=""
+    if [ $2 = default ]; then
+      cable_driver=""
     else
-      cbldrv="--cable-driver $2"
+      cable_driver="--cable-driver $2"
     fi
-     
+
     kubectl config use-context $context
     subctl join --kubeconfig ${DAPPER_SOURCE}/output/kind-config/dapper/kind-config-$context \
                 --clusterid ${context} \
@@ -60,16 +60,16 @@ function subctl_install_subm() {
                 --nattport ${ce_ipsec_nattport} \
                 --ikeport ${ce_ipsec_ikeport} \
                 --colorcodes ${subm_colorcodes} \
-                $cbldrv \
+                $cable_driver \
                 --disable-nat \
                 broker-info.subm
 }
 
 function install_subm_all_clusters() {
-    cbldrv=$1 
+    cable_driver=$1
     for i in 1 2 3; do
         context=cluster$i
-        subctl_install_subm $context $cbldrv
+        subctl_install_subm $context $cable_driver
     done
 }
 

@@ -315,7 +315,7 @@ while true; do
             globalnet="$2"
             ;;
         --cable_driver)
-            cbldrv="$2"
+            cable_driver="$2"
             ;;
         --)
             break
@@ -327,7 +327,7 @@ while true; do
     shift 2
 done
 
-echo Starting with status: $status, k8s_version: $version, logging: $logging, kubefed: $kubefed, deploy: $deploy, globalnet: $globalnet, cable_driver: $cbldrv
+echo Starting with status: $status, k8s_version: $version, logging: $logging, kubefed: $kubefed, deploy: $deploy, globalnet: $globalnet, cable_driver: $cable_driver
 
 if [[ $globalnet = "true" ]]; then
   # When globalnet is set to true, we want to deploy clusters with overlapping CIDRs
@@ -396,7 +396,7 @@ deploytool_prereqs
 run_parallel "{1..3}" prepare_cluster
 
 setup_broker cluster1
-install_subm_all_clusters $cbldrv
+install_subm_all_clusters $cable_driver
 
 deploytool_postreqs
 
