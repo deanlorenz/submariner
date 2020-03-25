@@ -47,9 +47,11 @@ function setup_broker() {
 function subctl_install_subm() {
     context=$1
     if [ $2 = default ]; then
+      cable_flag=""
       cable_driver=""
     else
-      cable_driver="--cable-driver $2"
+      cable_flag="--cable-driver"
+      cable_driver=$2
     fi
 
     kubectl config use-context $context
@@ -60,7 +62,7 @@ function subctl_install_subm() {
                 --nattport ${ce_ipsec_nattport} \
                 --ikeport ${ce_ipsec_ikeport} \
                 --colorcodes ${subm_colorcodes} \
-                $cable_driver \
+                ${cable_flag} ${cable_driver} \
                 --disable-nat \
                 broker-info.subm
 }
