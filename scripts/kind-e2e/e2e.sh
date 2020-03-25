@@ -288,7 +288,7 @@ function cleanup {
 
 ### Main ###
 
-LONGOPTS=status:,k8s_version:,logging:,kubefed:,deploytool:,globalnet:,cable_driver:
+LONGOPTS=status:,k8s_version:,logging:,kubefed:,deploytool:,globalnet:
 # Only accept longopts, but must pass null shortopts or first param after "--" will be incorrectly used
 SHORTOPTS=""
 ! PARSED=$(getopt --options=$SHORTOPTS --longoptions=$LONGOPTS --name "$0" -- "$@")
@@ -314,9 +314,6 @@ while true; do
         --globalnet)
             globalnet="$2"
             ;;
-        --cable_driver)
-            cable_driver="$2"
-            ;;
         --)
             break
             ;;
@@ -327,7 +324,7 @@ while true; do
     shift 2
 done
 
-echo Starting with status: $status, k8s_version: $version, logging: $logging, kubefed: $kubefed, deploy: $deploy, globalnet: $globalnet, cable_driver: $cable_driver
+echo Starting with status: $status, k8s_version: $version, logging: $logging, kubefed: $kubefed, deploy: $deploy, globalnet: $globalnet
 
 if [[ $globalnet = "true" ]]; then
   # When globalnet is set to true, we want to deploy clusters with overlapping CIDRs
@@ -396,7 +393,7 @@ deploytool_prereqs
 run_parallel "{1..3}" prepare_cluster
 
 setup_broker cluster1
-install_subm_all_clusters $cable_driver
+install_subm_all_clusters
 
 deploytool_postreqs
 
